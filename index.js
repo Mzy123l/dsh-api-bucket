@@ -1,7 +1,7 @@
 /**
  * dsh-api-bucket —— 把 DeepSeek「全家桶应用 API」注册成模型工具。
  *
- * 覆盖能力（每个都能在设置面板单独开关、单独选提供方）：
+ * 覆盖能力（每个都能在设置面板单独开关）：
  *   · 文件输入（Files API + 对话引用，支持文本/图片/文档解析两种 purpose）
  *   · 阅读链接（POST /v1/tools/fetch）
  *   · 模型安全（chat/completions 的 safety_check）
@@ -14,12 +14,10 @@
  *     （默认 `~/.dsh/dsh-api-bucket-profile.json`）；插件不读也不写 profile 的
  *     cordis.patch.yml。设置面板通过本插件的 `/__dsh_api_bucket__/config` 端点
  *     读写这份 JSON，保存后立即生效（工具用 `when` 读活配置，不需要重启）。
- *  2. 提供方沿用官方 web-deepseek-api 的口径：
- *       auto        —— 跟随当前会话的模型路由（deepseek-account 先用账号，deepseek-official
- *                      只用 API Key，其他路由先 API Key 再账号）
- *       account     —— 只用已登录的 DeepSeek 账号
- *       api-key     —— 只用 DeepSeek API Key
- *     账号令牌走 `x-dsh-auth-token`，API Key 走 `Authorization: Bearer`。
+ *  2. 凭据与基址不单独配置：直接读「设置 → 模型」里 DeepSeek API Key 路由
+ *     （@deepseek-ai/dsh-llm-deepseek-api-key）的生效配置——查找逻辑照抄官方
+ *     web-deepseek-api 的 routeConfig/officialSource；该路由不存在或没配 Key 时
+ *     回落到官方基址 + DEEPSEEK_API_KEY，与官方行为一致。
  *  3. 零第三方依赖；只用 Node 内置模块与全局 fetch/FormData/Blob。
  */
 
@@ -33,11 +31,17 @@ export const name = 'dsh-api-bucket'
 /** 需要的服务：工具注册必有；账号、凭据、agents、webServer 用可选读取。 */
 export const inject = ['tools']
 
-/** 默认 DeepSeek 开放平台基址。 */
+/** 默认 DeepSeek 开放平台基址（路由不存在时的回落，与官方一致）。 */
 const DEFAULT_BASE_URL = 'https://api.deepseek.com'
 
-/** 默认 API Key 的凭据引用名。 */
+/** 默认 API Key 的凭据引用名（路由不存在时的回落，与官方一致）。 */
 const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY'
+
+/** DeepSeek API Key 模型路由的 provider id（与官方 web-deepseek-api 的 OFFICIAL_PROVIDER 一致）。 */
+const OFFICIAL_PROVIDER = 'deepseek-official'
+
+/** 注册该路由的 loader 包名（与官方 ROUTE_PACKAGES 一致）。 */
+const ROUTE_PACKAGE = '@deepseek-ai/dsh-llm-deepseek-api-key'
 
 /** 文件输入与安全校验用的模型（全家桶能力只在这些模型上提供）。 */
 const DEFAULT_MODEL = 'deepseek-flash'
@@ -60,13 +64,11 @@ const TOOL_NAMES = {
 
 /**
  * 代码里的出厂配置。
- * 六个能力统一用 DeepSeek API Key 驱动：账号令牌不被 TTS/ASR 接受，
- * 统一走 Key 才能让每个能力都可用，也不再需要逐个选提供方。
+ * 凭据与基址都来自「设置 → 模型」里的 DeepSeek API Key 路由（llm-deepseek），
+ * 不在本插件里重复配置；六个能力只有开关与各自的少量参数。
  */
 const DEFAULTS = {
-  version: 2,
-  baseURL: DEFAULT_BASE_URL,
-  apiKeyEnv: DEFAULT_API_KEY_ENV,
+  version: 3,
   file: { enabled: true, model: DEFAULT_MODEL },
   readlink: { enabled: true },
   safety: { enabled: true, model: DEFAULT_MODEL },
@@ -98,8 +100,7 @@ export function normalizeConfig(raw) {
     if (typeof value !== 'string' || value.length === 0) return fallback
     return allowed !== undefined && !allowed.includes(value) ? fallback : value
   }
-  out.baseURL = text(raw.baseURL, DEFAULTS.baseURL).replace(/\/+$/u, '')
-  out.apiKeyEnv = text(raw.apiKeyEnv, DEFAULTS.apiKeyEnv)
+  // 旧配置里的 baseURL/apiKeyEnv 字段不再保留：凭据与基址来自「设置 → 模型」的路由配置。
   for (const key of CAPABILITIES) {
     const row = raw[key]
     if (row === null || typeof row !== 'object' || Array.isArray(row)) continue
@@ -226,31 +227,80 @@ async function errorDetail(response) {
 }
 
 /**
+ * 配置指纹：设置页用它做自动更新——GET 轮询时 rev 变了才重读整页。
+ */
+function configRev(config) {
+  const rows = CAPABILITIES.map((key) => {
+    const row = config[key] ?? {}
+    return [key, row.enabled !== false, row.model, row.voice, row.format, row.outputDir].join(':')
+  })
+  return rows.join('|')
+}
+
+/**
+ * 凭据来源状态：路由是否找到了、用的是哪个凭据引用。只回状态不回值。
+ */
+function routeSource(ctx) {
+  const config = routeConfig(ctx)
+  if (config === undefined) return { route: false, apiKeyEnv: DEFAULT_API_KEY_ENV }
+  const resolved = plainConfig(config)
+  return { route: true, apiKeyEnv: resolved.apiKeyEnv || DEFAULT_API_KEY_ENV }
+}
+
+/**
+ * 找到「设置 → 模型」里 DeepSeek API Key 路由的生效配置。
+ *
+ * 逻辑照抄官方 @deepseek-ai/dsh-web-deepseek-api 的 routeConfig()（index.ts:364-372）：
+ * llm 目录里该路由必须是活跃的 loader entry，且不是嵌套设置；否则视为不存在。
+ * @returns 路由的生效配置（含 Volatile 字段），找不到时为 undefined。
+ */
+function routeConfig(ctx) {
+  const llm = ctx.get('llm'), loader = ctx.get('loader')
+  if (llm === undefined || loader === undefined || !llm.listProviders().some(row => row.id === OFFICIAL_PROVIDER)) return undefined
+  const directory = llm.listConfigurableProviders().find(row => row.provider === OFFICIAL_PROVIDER)
+  if (directory === undefined || directory.settingsPath.length !== 0) return undefined
+  const entry = [...loader.entries()].find(row => row.options.id === directory.settingsNs && row.options.name === ROUTE_PACKAGE)
+  // FiberState.ACTIVE === 2（cordis 的 const enum，打包后是数字字面量）。
+  if (entry?.fiber?.state !== 2) return undefined
+  return entry.fiber.effectiveConfig
+}
+
+/** 解包 Volatile 配置字段（照抄官方 dsh-llm-deepseek 的 plainOptions，config.ts:65-67）。 */
+function plainConfig(config) {
+  return Object.fromEntries(Object.entries(config ?? {}).map(([key, value]) => [key, value?.get?.() ?? value]))
+}
+
+/**
  * 解析一次调用要用的凭据与基址。
- * 六个能力统一使用 DeepSeek API Key：优先读 DSH 的凭据服务，
- * 没有该服务时回落到启动环境变量。
+ *
+ * 凭据与基址都来自「设置 → 模型」里的 DeepSeek API Key 路由（照抄官方
+ * officialSource，dsh-web-deepseek-api index.ts:266-273）：baseURL 与 apiKeyEnv
+ * 从同一个配置代读取；凭据引用经 DSH 的凭据服务解析。路由不存在或配置无效时，
+ * 官方会回落到官方基址 + DEEPSEEK_API_KEY，这里同样回落。
  * @returns {{ baseURL: string, headers: Record<string, string> }}
  */
-async function resolveAuth(ctx, config) {
-  const base = config.baseURL || DEFAULT_BASE_URL
-  const ref = config.apiKeyEnv || DEFAULT_API_KEY_ENV
+async function resolveAuth(ctx) {
+  const config = routeConfig(ctx)
+  let baseURL = DEFAULT_BASE_URL
+  let ref = DEFAULT_API_KEY_ENV
+  if (config !== undefined) {
+    const resolved = plainConfig(config)
+    if (typeof resolved.baseURL === 'string' && resolved.baseURL.length > 0) baseURL = resolved.baseURL
+    if (typeof resolved.apiKeyEnv === 'string' && resolved.apiKeyEnv.length > 0) ref = resolved.apiKeyEnv
+  }
   const credentials = ctx.get('credentials')
   let key
   if (credentials !== undefined) {
     const hit = await credentials.resolve(ref)
     if (hit !== undefined && typeof hit.value === 'string' && hit.value.length > 0) key = hit.value
-  } else {
-    const ambient = process.env[ref]
-    if (typeof ambient === 'string' && ambient.length > 0) key = ambient
   }
   if (key === undefined) {
     throw new Error(
       `没有可用的 DeepSeek API Key：凭据 ${ref} 未配置。`
-      + `请在设置面板填写正确的凭据名，或在 Models 页添加 DeepSeek API Key，`
-      + `或在启动环境里设置环境变量 ${ref}。`,
+      + `请在「设置 → 模型」的 DeepSeek API Key 里填写，或确认该路由已启用。`,
     )
   }
-  return { baseURL: base, headers: { authorization: `Bearer ${key}` } }
+  return { baseURL: baseURL.replace(/\/+$/u, ''), headers: { authorization: `Bearer ${key}` } }
 }
 
 /** 发一个 JSON POST 并解析 JSON。 */
@@ -410,7 +460,7 @@ export function apply(ctx) {
       async execute(args, exec) {
         const current = config()
         const model = current.file.model || DEFAULT_MODEL
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const kind = classify(args.path)
         const local = await readLocalFile(args.path, kind, exec.signal, sessionCwd(exec))
         const purpose = kind === 'document'
@@ -473,7 +523,7 @@ export function apply(ctx) {
       timeoutMs: 120_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const { json } = await postJSON(`${auth.baseURL}/v1/tools/fetch`, auth.headers, { url: args.url }, exec.signal)
         const content = typeof json?.content === 'string' ? json.content : ''
         const cap = 200_000
@@ -505,7 +555,7 @@ export function apply(ctx) {
       timeoutMs: 120_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const endpoint = `${auth.baseURL}/chat/completions`
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -571,7 +621,7 @@ export function apply(ctx) {
       timeoutMs: 200_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const local = await readLocalFile(args.path, 'document', exec.signal, sessionCwd(exec))
         const purpose = args.layout === true ? 'rich_layout_recognition' : 'text_recognition'
         const json = await postForm(`${auth.baseURL}/v1/tools/ocr`, auth.headers, (form) => {
@@ -619,7 +669,7 @@ export function apply(ctx) {
       timeoutMs: 660_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const local = await readLocalFile(args.path, 'audio', exec.signal, sessionCwd(exec))
         if (!AUDIO_EXTENSIONS.has(path.extname(local.name).toLowerCase())) {
           throw new Error(`${local.name} 不是 WAV/Ogg Opus；ASR 只收 16 位 PCM WAV 与 Ogg Opus`)
@@ -661,7 +711,7 @@ export function apply(ctx) {
       timeoutMs: 660_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current)
+        const auth = await resolveAuth(ctx)
         const voice = typeof args.voice === 'string' ? args.voice : current.tts.voice
         const format = current.tts.format === 'pcm' ? 'pcm' : 'wav'
         const response = await fetch(`${auth.baseURL}/v1/tools/tts`, {
@@ -746,7 +796,8 @@ export function apply(ctx) {
         }
         try {
           if (req.method === 'GET' || req.method === 'HEAD') {
-            send(200, { config: readConfig(), path: configPath() })
+            const config = readConfig()
+            send(200, { config, path: configPath(), rev: configRev(config), source: routeSource(ctx) })
             return
           }
           if (req.method !== 'POST') {
@@ -759,7 +810,7 @@ export function apply(ctx) {
           const raw = Buffer.concat(chunks).toString('utf8')
           const parsed = raw.length === 0 ? {} : JSON.parse(raw)
           const next = writeConfig(parsed?.config ?? parsed)
-          send(200, { config: next, path: configPath() })
+          send(200, { config: next, path: configPath(), rev: configRev(next), source: routeSource(ctx) })
         } catch (error) {
           send(400, { error: error instanceof Error ? error.message : String(error) })
         }

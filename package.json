@@ -1,7 +1,7 @@
 {
   "name": "dsh-api-bucket",
-  "version": "2.0.0",
-  "description": "把 DeepSeek「全家桶应用 API」（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，设置面板逐项开关；六个能力统一由 DeepSeek API Key 驱动。",
+  "version": "3.0.0",
+  "description": "把 DeepSeek「全家桶应用 API」（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，设置面板逐项开关、自动保存自动更新；凭据与基址直接读「设置 → 模型」的 DeepSeek API Key。",
   "type": "module",
   "license": "GPL-3.0-or-later",
   "icon": "./icon.svg",

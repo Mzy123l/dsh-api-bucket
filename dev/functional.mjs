@@ -29,27 +29,30 @@ const configFile = path.join(home, 'dsh-api-bucket-profile.json')
 // ---------- 1. 首次读取会建文件 ----------
 const seeded = mod.readConfig()
 assert.equal(fs.existsSync(configFile), true, '首次 readConfig 应建出配置文件')
-assert.equal(seeded.baseURL, 'https://api.deepseek.com')
+assert.equal('baseURL' in seeded, false, '配置里不再有 baseURL（来自模型页路由）')
+assert.equal('apiKeyEnv' in seeded, false, '配置里不再有 apiKeyEnv')
 assert.equal(seeded.file.enabled, true)
 assert.equal(seeded.tts.voice, 'stella')
 console.log('✓ 首次读取建文件，出厂值正确')
 
 // ---------- 2. 非法值回落默认 ----------
 const stored = JSON.parse(fs.readFileSync(configFile, 'utf8'))
-// 旧配置遗留的 provider 字段应被丢弃：现在只剩 API Key 一条通路。
+// 旧配置遗留的 provider/baseURL/apiKeyEnv 字段应被丢弃。
 stored.file = { enabled: false, provider: '不存在的提供方' }
 stored.tts = { enabled: 'yes', provider: 'account', voice: 'nobody', outputDir: '' }
 stored.baseURL = 'https://example.com///'
+stored.apiKeyEnv = 'MY_KEY'
 fs.writeFileSync(configFile, JSON.stringify(stored), 'utf8')
 const normalized = mod.readConfig()
 assert.equal(normalized.file.enabled, false, 'enabled=false 应保留')
 assert.equal('provider' in normalized.file, false, 'provider 字段应被丢弃')
 assert.equal('provider' in normalized.tts, false, 'tts 的 provider 字段也应被丢弃')
+assert.equal('baseURL' in normalized, false, 'baseURL 字段应被丢弃')
+assert.equal('apiKeyEnv' in normalized, false, 'apiKeyEnv 字段应被丢弃')
 assert.equal(normalized.tts.enabled, true, '非布尔 enabled 应回落默认 true')
 assert.equal(normalized.tts.voice, 'stella', '非法 voice 应回落 stella')
 assert.equal(normalized.tts.outputDir, 'dsh-api-bucket', '空 outputDir 应回落默认')
-assert.equal(normalized.baseURL, 'https://example.com', '基址尾部斜杠应剥掉')
-console.log('✓ 非法值与缺字段按默认收敛，旧 provider 字段被丢弃')
+console.log('✓ 非法值与缺字段按默认收敛，旧 provider/baseURL/apiKeyEnv 字段被丢弃')
 
 // ---------- 3. 损坏文件会备份重建 ----------
 fs.writeFileSync(configFile, '{ 这不是 JSON', 'utf8')
@@ -119,11 +122,18 @@ const get = await call()
 assert.equal(get.status, 200)
 assert.equal(get.body.config.asr.enabled, false, 'GET 应返回当前配置')
 assert.equal(get.body.path, configFile)
-console.log('✓ GET 返回当前配置与路径')
+assert.equal(typeof get.body.rev, 'string', 'GET 应带配置指纹 rev')
+assert.deepEqual(get.body.source, { route: false, apiKeyEnv: 'DEEPSEEK_API_KEY' }, '无 llm/loader 时来源应回落')
+console.log('✓ GET 返回配置、路径、指纹与凭据来源')
 
-const post = await call({ method: 'POST', body: { config: { ...get.body.config, ocr: { enabled: true } } } })
+// 有实际变化：ocr 关掉（GET 时它是 true）
+const post = await call({ method: 'POST', body: { config: { ...get.body.config, ocr: { enabled: false } } } })
 assert.equal(post.status, 200)
-assert.equal(post.body.config.ocr.enabled, true, 'POST 应写回并回显')
+assert.equal(post.body.config.ocr.enabled, false, 'POST 应写回并回显')
+assert.notEqual(post.body.rev, get.body.rev, '实际变化后 rev 应改变（自动更新依据）')
+// 无实际变化：同样的配置再写一遍，rev 不应变
+const same = await call({ method: 'POST', body: { config: post.body.config } })
+assert.equal(same.body.rev, post.body.rev, '无变化时 rev 应保持不变')
 assert.equal('provider' in JSON.parse(fs.readFileSync(configFile, 'utf8')).ocr, false, '落盘后不应有 provider')
 console.log('✓ POST 写回并落盘')
 

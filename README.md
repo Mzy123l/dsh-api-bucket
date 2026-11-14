@@ -20,16 +20,16 @@
 配置**只**存在当前用户自己的 `$DSH_HOME/dsh-api-bucket-profile.json`（Windows 上默认 `C:\Users\<你>\.dsh\dsh-api-bucket-profile.json`）。插件不读也不写 profile 的 `cordis.patch.yml`，多用户共用一份 profile 时各用各的。
 
 - 首次启动按出厂值自动建文件；
-- 设置页每改一次点「保存」即刻生效，无需重启（工具通过 `when` 读活配置）；
+- 设置页**自动保存**：改动立即写回（开关即时，输入字段防抖 400ms），无需点任何按钮；
+- 设置页**自动更新**：页面每 2 秒探测一次配置指纹，外部改动（手改文件）自动刷新，无需手动重读；
+- 工具通过 `when` 读活配置，开关即刻生效，无需重启；
 - 文件损坏会自动改名备份成 `*.broken-<时间戳>` 后重新生成。
 
 字段：
 
 ```json
 {
-  "version": 2,
-  "baseURL": "https://api.deepseek.com",
-  "apiKeyEnv": "DEEPSEEK_API_KEY",
+  "version": 3,
   "file":     { "enabled": true, "model": "deepseek-flash" },
   "readlink": { "enabled": true },
   "safety":   { "enabled": true, "model": "deepseek-flash" },
@@ -39,9 +39,13 @@
 }
 ```
 
-### 凭据：六个能力统一用 API Key
+### 凭据：直接读「设置 → 模型」的 DeepSeek API Key
 
-设置面板只保留每项能力的开关，不再逐个选提供方 —— 六个能力一律用 `apiKeyEnv` 指向的凭据（默认 `DEEPSEEK_API_KEY`），请求头是 `Authorization: Bearer`。
+插件里没有基址和凭据名配置。六个能力一律用「设置 → 模型」里 **DeepSeek API Key 路由**（`@deepseek-ai/dsh-llm-deepseek-api-key`）的 `baseURL` 与 `apiKeyEnv`——查找逻辑照抄官方 `web-deepseek-api` 的 `routeConfig`/`officialSource`；Key 经 DSH 凭据服务解析，请求头是 `Authorization: Bearer`。
+
+- 模型页改了 Key 或基址，工具下一次调用立即跟随，无需改本插件；
+- 该路由不存在或未启用时回落到官方基址 + `DEEPSEEK_API_KEY`，与官方行为一致；
+- 设置页底部显示当前凭据来源（找到了路由，或已回落）。
 
 这么做的原因是实测出来的服务端边界：官方账号令牌对部分端点无效。
 
@@ -55,7 +59,7 @@
 
 TTS 与 ASR 拒绝账号令牌时返回 `401 Authentication Fails (missing key)`；把令牌换成 `Bearer` 或 `x-api-key` 头重试仍是 401，是服务端的凭据边界，不是请求写法问题。统一走 API Key 后六个能力才都能用。
 
-> 从 v1 升级：旧配置里的 `provider` 字段会被自动丢弃，不需要手动改；文件里的其它字段照常保留。
+> 从旧版升级：配置里的 `provider`、`baseURL`、`apiKeyEnv` 字段会被自动丢弃，不需要手动改；其它字段照常保留。
 
 ## 各工具的行为
 
@@ -69,7 +73,7 @@ TTS 与 ASR 拒绝账号令牌时返回 `401 Authentication Fails (missing key)`
 ## 权限与安全
 
 - `/__dsh_api_bucket__/config` 只接受本机回环请求，其他来源 403。
-- API Key 只从 DSH 的凭据服务（或启动环境变量）读，不写进配置、不写进日志。
+- API Key 来自「设置 → 模型」的路由配置，经 DSH 凭据服务解析，不写进配置、不写进日志。
 - 插件不缓存储存凭据，每次调用重新解析。
 
 ## 依赖
