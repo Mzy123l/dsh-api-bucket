@@ -1,10 +1,18 @@
 {
   "name": "dsh-api-bucket",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "把 DeepSeek「全家桶应用 API」（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，设置面板逐项开关、自动保存自动更新；凭据与基址直接读「设置 → 模型」的 DeepSeek API Key。",
   "type": "module",
   "license": "GPL-3.0-or-later",
   "icon": "./icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mzy123l/dsh-api-bucket.git"
+  },
+  "homepage": "https://github.com/Mzy123l/dsh-api-bucket#readme",
+  "bugs": {
+    "url": "https://github.com/Mzy123l/dsh-api-bucket/issues"
+  },
   "keywords": [
     "dsh",
     "deepseek-harness",
