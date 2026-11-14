@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "API suite",
-    "description": "Register the DeepSeek suite APIs (file input, link reading, model safety, OCR, ASR, TTS) as model tools, each with its own switch and provider in the settings panel."
+    "description": "Register the DeepSeek suite APIs (file input, link reading, model safety, OCR, ASR, TTS) as model tools, each switchable in the settings panel; all six use a DeepSeek API key."
   },
   "capabilities": {
     "file": "File input",

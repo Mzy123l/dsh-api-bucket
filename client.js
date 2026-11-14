@@ -2,8 +2,8 @@
  * dsh-api-bucket 的设置页（设置 →「API 全家桶」）。
  *
  * 一页管六项能力：文件输入、阅读链接、模型安全、OCR、ASR、TTS。
- * 每项一行开关 + 一个提供方菜单（自动 / 已登录的 DeepSeek 账号 / DeepSeek API Key），
- * TTS 另有音色与输出目录，页面底部是基址与 API Key 凭据名。
+ * 每项只有一行开关；六项统一由 DeepSeek API Key 驱动，
+ * 不再逐个选提供方。TTS 另有音色与输出目录，页面底部是基址与 API Key 凭据名。
  *
  * 配置只存在本用户的 `$DSH_HOME/dsh-api-bucket-profile.json`：
  * 本页通过 `/__dsh_api_bucket__/config` 读写，不碰 profile 的 cordis.patch.yml。
@@ -36,11 +36,6 @@ window.__ModuleLoader__.load({
       '识别文档或图片里的文字，按页返回。': 'Recognize text in a document or image, page by page.',
       '把音频转写成文字（16 位 PCM WAV 或 Ogg Opus，最长 120 秒）。': 'Transcribe audio to text (16-bit PCM WAV or Ogg Opus, up to 120 seconds).',
       '把文字合成为语音，音频存成本地文件并在对话里作为交付物展示。': 'Synthesize speech from text and save it as a local file shown as a deliverable in the conversation.',
-      '提供方': 'Provider',
-      '自动': 'Automatic',
-      '已登录的 DeepSeek 账号': 'Signed-in DeepSeek account',
-      'DeepSeek API Key': 'DeepSeek API key',
-      '跟随当前会话的模型路由选凭据；其他路由先 API Key 再账号。': 'Picks the credential by this conversation\'s model route; other routes try the API key first, then the account.',
       '模型': 'Model',
       '音色': 'Voice',
       '女声': 'Female',
@@ -50,6 +45,7 @@ window.__ModuleLoader__.load({
       '基址': 'Base URL',
       'API Key 凭据名': 'API key credential',
       '模型工具从该凭据读取 API Key；留空时用 DEEPSEEK_API_KEY。': 'The tools read the API key from this credential; blank means DEEPSEEK_API_KEY.',
+      '六个能力统一使用 DeepSeek API Key 驱动。': 'All six capabilities use the DeepSeek API key.',
       '保存': 'Save',
       '保存中…': 'Saving…',
       '重新读取': 'Reload',
@@ -125,13 +121,6 @@ window.__ModuleLoader__.load({
       { key: 'ocr', title: 'OCR', hint: '识别文档或图片里的文字，按页返回。' },
       { key: 'asr', title: '语音识别', hint: '把音频转写成文字（16 位 PCM WAV 或 Ogg Opus，最长 120 秒）。' },
       { key: 'tts', title: '语音合成', hint: '把文字合成为语音，音频存成本地文件并在对话里作为交付物展示。', tts: true },
-    ]
-
-    /** 提供方选项。 */
-    const PROVIDERS = [
-      { value: 'auto', label: '自动' },
-      { value: 'account', label: '已登录的 DeepSeek 账号' },
-      { value: 'api-key', label: 'DeepSeek API Key' },
     ]
 
     /* ---------- 样式（全部走主题令牌，跟随亮/暗色） ---------- */
@@ -294,6 +283,7 @@ window.__ModuleLoader__.load({
         h('div', null,
           h('h4', { style: S.title }, t('API 全家桶')),
           h('p', { style: S.hint }, t('把 DeepSeek 的全家桶应用 API 注册成模型工具')),
+          h('p', { style: S.hint }, t('六个能力统一使用 DeepSeek API Key 驱动。')),
         ),
         h('div', { style: S.card },
           ROWS.map((row, index) => {
@@ -312,16 +302,6 @@ window.__ModuleLoader__.load({
                   onChange: (next) => edit(row.key, { enabled: next }),
                 }),
               ),
-              h(Select, {
-                label: t('提供方'),
-                value: state.provider ?? 'auto',
-                options: PROVIDERS.map((option) => ({ value: option.value, label: t(option.label) })),
-                disabled,
-                onChange: (next) => edit(row.key, { provider: next }),
-              }),
-              state.provider === 'auto'
-                ? h('span', { style: S.hint }, t('跟随当前会话的模型路由选凭据；其他路由先 API Key 再账号。'))
-                : null,
               row.model === true
                 ? h(Field, {
                     label: t('模型'),

@@ -36,18 +36,20 @@ console.log('✓ 首次读取建文件，出厂值正确')
 
 // ---------- 2. 非法值回落默认 ----------
 const stored = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+// 旧配置遗留的 provider 字段应被丢弃：现在只剩 API Key 一条通路。
 stored.file = { enabled: false, provider: '不存在的提供方' }
 stored.tts = { enabled: 'yes', provider: 'account', voice: 'nobody', outputDir: '' }
 stored.baseURL = 'https://example.com///'
 fs.writeFileSync(configFile, JSON.stringify(stored), 'utf8')
 const normalized = mod.readConfig()
 assert.equal(normalized.file.enabled, false, 'enabled=false 应保留')
-assert.equal(normalized.file.provider, 'auto', '非法 provider 应回落 auto')
+assert.equal('provider' in normalized.file, false, 'provider 字段应被丢弃')
+assert.equal('provider' in normalized.tts, false, 'tts 的 provider 字段也应被丢弃')
 assert.equal(normalized.tts.enabled, true, '非布尔 enabled 应回落默认 true')
 assert.equal(normalized.tts.voice, 'stella', '非法 voice 应回落 stella')
 assert.equal(normalized.tts.outputDir, 'dsh-api-bucket', '空 outputDir 应回落默认')
 assert.equal(normalized.baseURL, 'https://example.com', '基址尾部斜杠应剥掉')
-console.log('✓ 非法值与缺字段按默认收敛')
+console.log('✓ 非法值与缺字段按默认收敛，旧 provider 字段被丢弃')
 
 // ---------- 3. 损坏文件会备份重建 ----------
 fs.writeFileSync(configFile, '{ 这不是 JSON', 'utf8')
@@ -58,10 +60,11 @@ assert.equal(backups.length, 1, '损坏文件应被改名备份一次')
 console.log('✓ 损坏文件备份后重建')
 
 // ---------- 4. 写回并原子落盘 ----------
-const written = mod.writeConfig({ ...recovered, asr: { enabled: false, provider: 'api-key' } })
+const written = mod.writeConfig({ ...recovered, asr: { enabled: false } })
 assert.equal(written.asr.enabled, false)
 const reread = JSON.parse(fs.readFileSync(configFile, 'utf8'))
-assert.equal(reread.asr.provider, 'api-key')
+assert.equal(reread.asr.enabled, false)
+assert.equal('provider' in reread.asr, false, '落盘后不应有 provider')
 assert.equal(fs.readdirSync(home).some((name) => name.includes('.tmp-')), false, '不应残留临时文件')
 console.log('✓ 写回原子落盘，无临时文件残留')
 
@@ -118,10 +121,10 @@ assert.equal(get.body.config.asr.enabled, false, 'GET 应返回当前配置')
 assert.equal(get.body.path, configFile)
 console.log('✓ GET 返回当前配置与路径')
 
-const post = await call({ method: 'POST', body: { config: { ...get.body.config, ocr: { enabled: true, provider: 'api-key' } } } })
+const post = await call({ method: 'POST', body: { config: { ...get.body.config, ocr: { enabled: true } } } })
 assert.equal(post.status, 200)
-assert.equal(post.body.config.ocr.provider, 'api-key', 'POST 应写回并回显')
-assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).ocr.provider, 'api-key', 'POST 应真的落盘')
+assert.equal(post.body.config.ocr.enabled, true, 'POST 应写回并回显')
+assert.equal('provider' in JSON.parse(fs.readFileSync(configFile, 'utf8')).ocr, false, '落盘后不应有 provider')
 console.log('✓ POST 写回并落盘')
 
 const remote = await call({ address: '10.0.0.9' })
@@ -135,14 +138,14 @@ console.log('✓ 非法请求体收敛为默认配置')
 
 // ---------- 6. 工具 when 读活配置 ----------
 // 上一步的非法体已把配置收敛回默认值，这里显式设一次再断言。
-mod.writeConfig({ ...mod.readConfig(), asr: { enabled: false, provider: 'auto' }, ocr: { enabled: true, provider: 'auto' } })
+mod.writeConfig({ ...mod.readConfig(), asr: { enabled: false }, ocr: { enabled: true } })
 const byName = new Map(registered.map((row) => [row.definition.name, row]))
 const asr = byName.get('deepseek_asr')
 assert.equal(asr.options.when(), false, 'asr 已关闭时 when 应为 false')
 const ocr = byName.get('deepseek_ocr')
 assert.equal(ocr.options.when(), true, 'ocr 已开启时 when 应为 true')
 // 改配置后立即生效（不重启）
-mod.writeConfig({ ...mod.readConfig(), asr: { enabled: true, provider: 'auto' } })
+mod.writeConfig({ ...mod.readConfig(), asr: { enabled: true } })
 assert.equal(asr.options.when(), true, '重新打开后 when 应立刻为 true')
 console.log('✓ when 读活配置，开关立即生效')
 
@@ -161,11 +164,11 @@ const fakeExec = {
 const appended = []
 fs.mkdirSync(fakeExec.agent.session.header.cwd, { recursive: true })
 delete process.env.DEEPSEEK_API_KEY
-mod.writeConfig({ ...mod.readConfig(), tts: { enabled: true, provider: 'api-key' } })
+mod.writeConfig({ ...mod.readConfig(), tts: { enabled: true } })
 await assert.rejects(
   () => tts.execute({ text: '你好' }, fakeExec),
   (error) => {
-    assert.match(String(error.message), /没有可用的 DeepSeek 凭据/u)
+    assert.match(String(error.message), /没有可用的 DeepSeek API Key/u)
     return true
   },
   'TTS 无凭据时应报出可读错误',

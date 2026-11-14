@@ -47,14 +47,6 @@ const ctx = {
   on() { return () => {} },
   get(name) {
     if (name === 'credentials') return credentials
-    if (name === 'deepseekAccount') {
-      return {
-        async resolveToken() {
-          // 只有登录态能签出令牌；这里由调用结果暴露是否存在。
-          return undefined
-        },
-      }
-    }
     return undefined
   },
 }

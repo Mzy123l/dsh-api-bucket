@@ -1,6 +1,6 @@
 # dsh-api-bucket
 
-把 DeepSeek 的[全家桶应用 API](https://api-docs.deepseek.com/zh-cn/updates)注册成 DeepSeek Harness（DSH）里的模型工具，并在设置面板里逐项开关、逐项选择提供方。
+把 DeepSeek 的[全家桶应用 API](https://api-docs.deepseek.com/zh-cn/updates)注册成 DeepSeek Harness（DSH）里的模型工具，并在设置面板里逐项开关。六个能力统一由 DeepSeek API Key 驱动。
 
 | 能力 | 工具名 | 官方接口 |
 | --- | --- | --- |
@@ -27,28 +27,23 @@
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "baseURL": "https://api.deepseek.com",
   "apiKeyEnv": "DEEPSEEK_API_KEY",
-  "file":     { "enabled": true, "provider": "auto", "model": "deepseek-flash" },
-  "readlink": { "enabled": true, "provider": "auto" },
-  "safety":   { "enabled": true, "provider": "auto", "model": "deepseek-flash" },
-  "ocr":      { "enabled": true, "provider": "auto" },
-  "asr":      { "enabled": true, "provider": "auto" },
-  "tts":      { "enabled": true, "provider": "auto", "voice": "stella", "format": "wav", "outputDir": "dsh-api-bucket" }
+  "file":     { "enabled": true, "model": "deepseek-flash" },
+  "readlink": { "enabled": true },
+  "safety":   { "enabled": true, "model": "deepseek-flash" },
+  "ocr":      { "enabled": true },
+  "asr":      { "enabled": true },
+  "tts":      { "enabled": true, "voice": "stella", "format": "wav", "outputDir": "dsh-api-bucket" }
 }
 ```
 
-`provider` 取值：
+### 凭据：六个能力统一用 API Key
 
-- `auto` —— 跟随当前会话的模型路由，口径与官方 `web-deepseek-api` 一致：
-  会话跑在 `deepseek-account` 上时先用账号令牌、再用 API Key；跑在 `deepseek-official` 上时只用 API Key；其他路由先 API Key、再账号。
-- `account` —— 只用已登录的 DeepSeek 账号（令牌走 `x-dsh-auth-token`）。
-- `api-key` —— 只用 `apiKeyEnv` 指向的凭据（走 `Authorization: Bearer`）。
+设置面板只保留每项能力的开关，不再逐个选提供方 —— 六个能力一律用 `apiKeyEnv` 指向的凭据（默认 `DEEPSEEK_API_KEY`），请求头是 `Authorization: Bearer`。
 
-### 账号令牌的可用范围（实测）
-
-官方账号令牌只对部分端点有效。同一把令牌打同一批 `/v1/tools` 端点的实测结果：
+这么做的原因是实测出来的服务端边界：官方账号令牌对部分端点无效。
 
 | 端点 | 账号令牌 | API Key |
 | --- | --- | --- |
@@ -58,9 +53,9 @@
 | `/v1/tools/tts`（语音合成） | **401** | 200 |
 | `/v1/tools/asr`（语音识别） | **401** | 200 |
 
-TTS 与 ASR 拒绝账号令牌时返回 `401 Authentication Fails (missing key)`；把令牌换成 `Bearer` 或 `x-api-key` 头重试仍是 401，是该服务端的凭据边界，不是请求写法问题。
+TTS 与 ASR 拒绝账号令牌时返回 `401 Authentication Fails (missing key)`；把令牌换成 `Bearer` 或 `x-api-key` 头重试仍是 401，是服务端的凭据边界，不是请求写法问题。统一走 API Key 后六个能力才都能用。
 
-因此：**TTS 与 ASR 的提供方请用 `api-key` 或 `auto`**；选 `account` 时插件会直接告诉你改成哪种，而不是抛一个裸 401。
+> 从 v1 升级：旧配置里的 `provider` 字段会被自动丢弃，不需要手动改；文件里的其它字段照常保留。
 
 ## 各工具的行为
 

@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "API 全家桶",
-    "description": "把 DeepSeek 全家桶应用 API（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，设置面板可逐项开关并选择提供方。"
+    "description": "把 DeepSeek 全家桶应用 API（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，设置面板可逐项开关；六个能力统一由 DeepSeek API Key 驱动。"
   },
   "capabilities": {
     "file": "文件输入",

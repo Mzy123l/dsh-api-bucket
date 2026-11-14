@@ -58,20 +58,21 @@ const TOOL_NAMES = {
   tts: 'deepseek_tts',
 }
 
-/** 提供方取值。 */
-const PROVIDERS = ['auto', 'account', 'api-key']
-
-/** 代码里的出厂配置。 */
+/**
+ * 代码里的出厂配置。
+ * 六个能力统一用 DeepSeek API Key 驱动：账号令牌不被 TTS/ASR 接受，
+ * 统一走 Key 才能让每个能力都可用，也不再需要逐个选提供方。
+ */
 const DEFAULTS = {
-  version: 1,
+  version: 2,
   baseURL: DEFAULT_BASE_URL,
   apiKeyEnv: DEFAULT_API_KEY_ENV,
-  file: { enabled: true, provider: 'auto', model: DEFAULT_MODEL },
-  readlink: { enabled: true, provider: 'auto' },
-  safety: { enabled: true, provider: 'auto', model: DEFAULT_MODEL },
-  ocr: { enabled: true, provider: 'auto' },
-  asr: { enabled: true, provider: 'auto' },
-  tts: { enabled: true, provider: 'auto', voice: 'stella', format: 'wav', outputDir: 'dsh-api-bucket' },
+  file: { enabled: true, model: DEFAULT_MODEL },
+  readlink: { enabled: true },
+  safety: { enabled: true, model: DEFAULT_MODEL },
+  ocr: { enabled: true },
+  asr: { enabled: true },
+  tts: { enabled: true, voice: 'stella', format: 'wav', outputDir: 'dsh-api-bucket' },
 }
 
 /** DSH 用户数据根：默认 `~/.dsh`，`$DSH_HOME` 可覆盖。 */
@@ -103,7 +104,7 @@ export function normalizeConfig(raw) {
     const row = raw[key]
     if (row === null || typeof row !== 'object' || Array.isArray(row)) continue
     out[key].enabled = typeof row.enabled === 'boolean' ? row.enabled : out[key].enabled
-    out[key].provider = text(row.provider, out[key].provider, PROVIDERS)
+    // 旧配置里的 provider 字段不再保留：一律走 API Key，读到就直接丢掉。
     if (key === 'file' || key === 'safety') {
       out[key].model = text(row.model, out[key].model)
     }
@@ -224,82 +225,32 @@ async function errorDetail(response) {
   return message
 }
 
-/** 会话当前模型路由的 provider，用于 auto 的凭据排序。 */
-function conversationProvider(ctx) {
-  try {
-    const agents = ctx.get('agents')
-    return agents?.currentInitiator?.()?.session?.requestContext?.()?.provider
-  } catch {
-    return undefined
-  }
-}
-
 /**
- * 解析一次调用要用的凭据与基址，口径与官方 web-deepseek-api 一致。
+ * 解析一次调用要用的凭据与基址。
+ * 六个能力统一使用 DeepSeek API Key：优先读 DSH 的凭据服务，
+ * 没有该服务时回落到启动环境变量。
  * @returns {{ baseURL: string, headers: Record<string, string> }}
  */
-async function resolveAuth(ctx, config, provider) {
+async function resolveAuth(ctx, config) {
   const base = config.baseURL || DEFAULT_BASE_URL
   const ref = config.apiKeyEnv || DEFAULT_API_KEY_ENV
-  const apiKey = async () => {
-    const credentials = ctx.get('credentials')
-    if (credentials !== undefined) {
-      const hit = await credentials.resolve(ref)
-      if (hit !== undefined && typeof hit.value === 'string' && hit.value.length > 0) return hit.value
-      return undefined
-    }
+  const credentials = ctx.get('credentials')
+  let key
+  if (credentials !== undefined) {
+    const hit = await credentials.resolve(ref)
+    if (hit !== undefined && typeof hit.value === 'string' && hit.value.length > 0) key = hit.value
+  } else {
     const ambient = process.env[ref]
-    return typeof ambient === 'string' && ambient.length > 0 ? ambient : undefined
+    if (typeof ambient === 'string' && ambient.length > 0) key = ambient
   }
-  const accountToken = async (endpoint) => {
-    try {
-      const token = await ctx.get('deepseekAccount')?.resolveToken(endpoint)
-      return typeof token === 'string' && token.length > 0 ? token : undefined
-    } catch {
-      return undefined
-    }
+  if (key === undefined) {
+    throw new Error(
+      `没有可用的 DeepSeek API Key：凭据 ${ref} 未配置。`
+      + `请在设置面板填写正确的凭据名，或在 Models 页添加 DeepSeek API Key，`
+      + `或在启动环境里设置环境变量 ${ref}。`,
+    )
   }
-
-  // 与官方一致的排序规则。
-  const route = conversationProvider(ctx)
-  let order
-  if (provider === 'account') order = ['account']
-  else if (provider === 'api-key') order = ['api-key']
-  else if (route === 'deepseek-account') order = ['account', 'api-key']
-  else if (route === 'deepseek-official') order = ['api-key']
-  else order = ['api-key', 'account']
-
-  const tried = []
-  for (const kind of order) {
-    if (kind === 'api-key') {
-      const key = await apiKey()
-      if (key !== undefined) return { baseURL: base, headers: { authorization: `Bearer ${key}` }, kind: 'api-key' }
-      tried.push(`API Key（凭据 ${ref}）`)
-      continue
-    }
-    const token = await accountToken(base)
-    if (token !== undefined) return { baseURL: base, headers: { 'x-dsh-auth-token': token }, kind: 'account' }
-    tried.push('已登录的 DeepSeek 账号')
-  }
-  throw new Error(
-    `没有可用的 DeepSeek 凭据。已尝试：${tried.join('、')}。`
-    + `请在设置面板把该能力的提供方改成可用的那种，或登录 DeepSeek / 配置 ${ref}。`,
-  )
-}
-
-/**
- * 某些端点只接受 API Key、不接受账号令牌（服务端返回 401
- * `Authentication Fails (missing key)`）。这里把它翻成可操作的提示，
- * 而不是把原始 401 直接抛给用户。
- * @param {string} capability - 能力名，用于提示。
- * @param {'account'|'api-key'} kind - 本次实际发送的凭据类型。
- * @param {string} detail - errorDetail 给出的说明。
- * @returns {string} 面向用户的错误说明。
- */
-function explainAuthFailure(capability, kind, detail) {
-  if (kind !== 'account' || !/missing key/iu.test(detail)) return detail
-  return `${detail}\n\n${capability} 不接受「已登录的 DeepSeek 账号」令牌，只能用 DeepSeek API Key（服务端的凭据边界，换请求头也无效）。`
-    + `请在设置面板把该能力的提供方改成「DeepSeek API Key」或「自动」。`
+  return { baseURL: base, headers: { authorization: `Bearer ${key}` } }
 }
 
 /** 发一个 JSON POST 并解析 JSON。 */
@@ -459,7 +410,7 @@ export function apply(ctx) {
       async execute(args, exec) {
         const current = config()
         const model = current.file.model || DEFAULT_MODEL
-        const auth = await resolveAuth(ctx, current, current.file.provider)
+        const auth = await resolveAuth(ctx, current)
         const kind = classify(args.path)
         const local = await readLocalFile(args.path, kind, exec.signal, sessionCwd(exec))
         const purpose = kind === 'document'
@@ -522,7 +473,7 @@ export function apply(ctx) {
       timeoutMs: 120_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current, current.readlink.provider)
+        const auth = await resolveAuth(ctx, current)
         const { json } = await postJSON(`${auth.baseURL}/v1/tools/fetch`, auth.headers, { url: args.url }, exec.signal)
         const content = typeof json?.content === 'string' ? json.content : ''
         const cap = 200_000
@@ -554,7 +505,7 @@ export function apply(ctx) {
       timeoutMs: 120_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current, current.safety.provider)
+        const auth = await resolveAuth(ctx, current)
         const endpoint = `${auth.baseURL}/chat/completions`
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -620,7 +571,7 @@ export function apply(ctx) {
       timeoutMs: 200_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current, current.ocr.provider)
+        const auth = await resolveAuth(ctx, current)
         const local = await readLocalFile(args.path, 'document', exec.signal, sessionCwd(exec))
         const purpose = args.layout === true ? 'rich_layout_recognition' : 'text_recognition'
         const json = await postForm(`${auth.baseURL}/v1/tools/ocr`, auth.headers, (form) => {
@@ -668,14 +619,14 @@ export function apply(ctx) {
       timeoutMs: 660_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current, current.asr.provider)
+        const auth = await resolveAuth(ctx, current)
         const local = await readLocalFile(args.path, 'audio', exec.signal, sessionCwd(exec))
         if (!AUDIO_EXTENSIONS.has(path.extname(local.name).toLowerCase())) {
           throw new Error(`${local.name} 不是 WAV/Ogg Opus；ASR 只收 16 位 PCM WAV 与 Ogg Opus`)
         }
         const json = await postForm(`${auth.baseURL}/v1/tools/asr`, auth.headers, (form) => {
           form.append('file', fileField(local.bytes, local.name), local.name)
-        }, exec.signal, (detail) => explainAuthFailure('语音识别（ASR）', auth.kind, detail))
+        }, exec.signal)
         return {
           text: typeof json?.text === 'string' ? json.text : '',
           durationMs: Number.isFinite(json?.duration_ms) ? Math.round(json.duration_ms) : 0,
@@ -710,7 +661,7 @@ export function apply(ctx) {
       timeoutMs: 660_000,
       async execute(args, exec) {
         const current = config()
-        const auth = await resolveAuth(ctx, current, current.tts.provider)
+        const auth = await resolveAuth(ctx, current)
         const voice = typeof args.voice === 'string' ? args.voice : current.tts.voice
         const format = current.tts.format === 'pcm' ? 'pcm' : 'wav'
         const response = await fetch(`${auth.baseURL}/v1/tools/tts`, {
@@ -724,7 +675,7 @@ export function apply(ctx) {
           }),
           signal: exec.signal,
         })
-        if (!response.ok) throw new Error(explainAuthFailure('语音合成（TTS）', auth.kind, await errorDetail(response)))
+        if (!response.ok) throw new Error(await errorDetail(response))
         const bytes = Buffer.from(await response.arrayBuffer())
         if (bytes.length === 0) throw new Error('TTS 未返回音频数据')
         const cwd = sessionCwd(exec)
