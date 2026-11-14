@@ -273,18 +273,33 @@ async function resolveAuth(ctx, config, provider) {
   for (const kind of order) {
     if (kind === 'api-key') {
       const key = await apiKey()
-      if (key !== undefined) return { baseURL: base, headers: { authorization: `Bearer ${key}` } }
+      if (key !== undefined) return { baseURL: base, headers: { authorization: `Bearer ${key}` }, kind: 'api-key' }
       tried.push(`API Key（凭据 ${ref}）`)
       continue
     }
     const token = await accountToken(base)
-    if (token !== undefined) return { baseURL: base, headers: { 'x-dsh-auth-token': token } }
+    if (token !== undefined) return { baseURL: base, headers: { 'x-dsh-auth-token': token }, kind: 'account' }
     tried.push('已登录的 DeepSeek 账号')
   }
   throw new Error(
     `没有可用的 DeepSeek 凭据。已尝试：${tried.join('、')}。`
     + `请在设置面板把该能力的提供方改成可用的那种，或登录 DeepSeek / 配置 ${ref}。`,
   )
+}
+
+/**
+ * 某些端点只接受 API Key、不接受账号令牌（服务端返回 401
+ * `Authentication Fails (missing key)`）。这里把它翻成可操作的提示，
+ * 而不是把原始 401 直接抛给用户。
+ * @param {string} capability - 能力名，用于提示。
+ * @param {'account'|'api-key'} kind - 本次实际发送的凭据类型。
+ * @param {string} detail - errorDetail 给出的说明。
+ * @returns {string} 面向用户的错误说明。
+ */
+function explainAuthFailure(capability, kind, detail) {
+  if (kind !== 'account' || !/missing key/iu.test(detail)) return detail
+  return `${detail}\n\n${capability} 不接受「已登录的 DeepSeek 账号」令牌，只能用 DeepSeek API Key（服务端的凭据边界，换请求头也无效）。`
+    + `请在设置面板把该能力的提供方改成「DeepSeek API Key」或「自动」。`
 }
 
 /** 发一个 JSON POST 并解析 JSON。 */
@@ -299,14 +314,24 @@ async function postJSON(url, headers, body, signal) {
   return { response, json: await response.json() }
 }
 
-/** 发一个 multipart POST 并解析 JSON。 */
-async function postForm(url, headers, buildForm, signal) {
+/**
+ * 发一个 multipart POST 并解析 JSON。
+ * @param {string} url - 完整端点。
+ * @param {Record<string,string>} headers - 鉴权头。
+ * @param {(form: FormData) => void} buildForm - 往表单里写字段。
+ * @param {AbortSignal|undefined} signal - 取消信号。
+ * @param {(detail: string) => string} [explain] - 把原始错误说明翻成可操作提示。
+ */
+async function postForm(url, headers, buildForm, signal, explain) {
   const form = new FormData()
   buildForm(form)
   const response = await fetch(url, {
     method: 'POST', headers: { ...headers, accept: 'application/json' }, body: form, signal,
   })
-  if (!response.ok) throw new Error(await errorDetail(response))
+  if (!response.ok) {
+    const detail = await errorDetail(response)
+    throw new Error(explain === undefined ? detail : explain(detail))
+  }
   const text = await response.text()
   if (text.trim().length === 0) throw new Error('服务端返回了空响应')
   try {
@@ -650,7 +675,7 @@ export function apply(ctx) {
         }
         const json = await postForm(`${auth.baseURL}/v1/tools/asr`, auth.headers, (form) => {
           form.append('file', fileField(local.bytes, local.name), local.name)
-        }, exec.signal)
+        }, exec.signal, (detail) => explainAuthFailure('语音识别（ASR）', auth.kind, detail))
         return {
           text: typeof json?.text === 'string' ? json.text : '',
           durationMs: Number.isFinite(json?.duration_ms) ? Math.round(json.duration_ms) : 0,
@@ -699,7 +724,7 @@ export function apply(ctx) {
           }),
           signal: exec.signal,
         })
-        if (!response.ok) throw new Error(await errorDetail(response))
+        if (!response.ok) throw new Error(explainAuthFailure('语音合成（TTS）', auth.kind, await errorDetail(response)))
         const bytes = Buffer.from(await response.arrayBuffer())
         if (bytes.length === 0) throw new Error('TTS 未返回音频数据')
         const cwd = sessionCwd(exec)

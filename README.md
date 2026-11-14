@@ -46,6 +46,22 @@
 - `account` —— 只用已登录的 DeepSeek 账号（令牌走 `x-dsh-auth-token`）。
 - `api-key` —— 只用 `apiKeyEnv` 指向的凭据（走 `Authorization: Bearer`）。
 
+### 账号令牌的可用范围（实测）
+
+官方账号令牌只对部分端点有效。同一把令牌打同一批 `/v1/tools` 端点的实测结果：
+
+| 端点 | 账号令牌 | API Key |
+| --- | --- | --- |
+| `/v1/tools/fetch`（阅读链接） | 200 | 200 |
+| `/v1/tools/ocr`（OCR） | 200 | 200 |
+| `/chat/completions`（文件输入、模型安全） | 200 | 200 |
+| `/v1/tools/tts`（语音合成） | **401** | 200 |
+| `/v1/tools/asr`（语音识别） | **401** | 200 |
+
+TTS 与 ASR 拒绝账号令牌时返回 `401 Authentication Fails (missing key)`；把令牌换成 `Bearer` 或 `x-api-key` 头重试仍是 401，是该服务端的凭据边界，不是请求写法问题。
+
+因此：**TTS 与 ASR 的提供方请用 `api-key` 或 `auto`**；选 `account` 时插件会直接告诉你改成哪种，而不是抛一个裸 401。
+
 ## 各工具的行为
 
 - **`deepseek_file_input(path, question, mode)`**：按扩展名选 purpose —— PDF/Word/PPT 走 `text_recognition`（`mode: layout` 时用 `rich_layout_recognition`），图片与纯文本走 `user_data`；上传拿 `file_id` 后在对话里引用并回答 `question`。返回 `answer`、`fileId`、`purpose`、`bytes`；命中内容审核时 `refusal: true`。
