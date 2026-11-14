@@ -277,6 +277,12 @@ function plainConfig(config) {
  * officialSource，dsh-web-deepseek-api index.ts:266-273）：baseURL 与 apiKeyEnv
  * 从同一个配置代读取；凭据引用经 DSH 的凭据服务解析。路由不存在或配置无效时，
  * 官方会回落到官方基址 + DEEPSEEK_API_KEY，这里同样回落。
+ *
+ * 基址照抄官方 toolsBase()（index.ts:375-377）：只取路由 baseURL 的 origin。
+ * 路由可能指向 Anthropic 兼容端点（如 …/anthropic），但全家桶工具端点
+ * （/v1/tools/*）与 OpenAI 兼容端点（/files、/chat/completions）都挂在 origin
+ * 根下；实测 /anthropic/v1/tools/* 返回 404、/anthropic/chat/completions
+ * 返回 400 missing anthropic-beta header，必须去掉路径前缀。
  * @returns {{ baseURL: string, headers: Record<string, string> }}
  */
 async function resolveAuth(ctx) {
@@ -285,7 +291,9 @@ async function resolveAuth(ctx) {
   let ref = DEFAULT_API_KEY_ENV
   if (config !== undefined) {
     const resolved = plainConfig(config)
-    if (typeof resolved.baseURL === 'string' && resolved.baseURL.length > 0) baseURL = resolved.baseURL
+    if (typeof resolved.baseURL === 'string' && resolved.baseURL.length > 0) {
+      try { baseURL = new URL(resolved.baseURL).origin } catch { baseURL = resolved.baseURL }
+    }
     if (typeof resolved.apiKeyEnv === 'string' && resolved.apiKeyEnv.length > 0) ref = resolved.apiKeyEnv
   }
   const credentials = ctx.get('credentials')
@@ -300,7 +308,7 @@ async function resolveAuth(ctx) {
       + `请在「设置 → 模型」的 DeepSeek API Key 里填写，或确认该路由已启用。`,
     )
   }
-  return { baseURL: baseURL.replace(/\/+$/u, ''), headers: { authorization: `Bearer ${key}` } }
+  return { baseURL, headers: { authorization: `Bearer ${key}` } }
 }
 
 /** 发一个 JSON POST 并解析 JSON。 */
