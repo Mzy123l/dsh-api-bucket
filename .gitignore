@@ -1,5 +1,8 @@
 # 开发/测试时的临时产物
 dev/*.png
 dev/*.log
+dev/fixtures/
+# TTS 默认输出目录（相对会话工作目录）
+dsh-api-bucket/
 node_modules/
 *.tmp

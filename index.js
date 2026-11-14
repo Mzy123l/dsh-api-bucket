@@ -169,11 +169,29 @@ function classify(file) {
   return 'plain'
 }
 
-/** 读一个本地文件成字节，并做大小校验。 */
-async function readLocalFile(file, kind, signal) {
+/** 会话工作目录，用于解析工具参数里的相对路径。 */
+function sessionCwd(exec) {
+  try {
+    return exec?.agent?.session?.header?.cwd ?? process.cwd()
+  } catch {
+    return process.cwd()
+  }
+}
+
+/**
+ * 读一个本地文件成字节，并做大小校验。
+ * 相对路径按当前会话的工作目录解析（不是进程 cwd），与 read/write 等内置工具一致。
+ */
+async function readLocalFile(file, kind, signal, cwd) {
   signal?.throwIfAborted?.()
-  const resolved = path.resolve(file)
-  const info = await fs.promises.stat(resolved)
+  const resolved = path.resolve(cwd ?? process.cwd(), file)
+  let info
+  try {
+    info = await fs.promises.stat(resolved)
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`文件不存在：${resolved}（相对路径按会话工作目录 ${cwd ?? process.cwd()} 解析）`)
+    throw error
+  }
   if (!info.isFile()) throw new Error(`不是普通文件：${resolved}`)
   const cap = LIMITS[kind] ?? LIMITS.document
   if (info.size > cap) {
@@ -418,7 +436,7 @@ export function apply(ctx) {
         const model = current.file.model || DEFAULT_MODEL
         const auth = await resolveAuth(ctx, current, current.file.provider)
         const kind = classify(args.path)
-        const local = await readLocalFile(args.path, kind, exec.signal)
+        const local = await readLocalFile(args.path, kind, exec.signal, sessionCwd(exec))
         const purpose = kind === 'document'
           ? (args.mode === 'layout' ? 'rich_layout_recognition' : 'text_recognition')
           : kind === 'image' || kind === 'plain' ? 'user_data' : 'text_recognition'
@@ -578,7 +596,7 @@ export function apply(ctx) {
       async execute(args, exec) {
         const current = config()
         const auth = await resolveAuth(ctx, current, current.ocr.provider)
-        const local = await readLocalFile(args.path, 'document', exec.signal)
+        const local = await readLocalFile(args.path, 'document', exec.signal, sessionCwd(exec))
         const purpose = args.layout === true ? 'rich_layout_recognition' : 'text_recognition'
         const json = await postForm(`${auth.baseURL}/v1/tools/ocr`, auth.headers, (form) => {
           form.append('purpose', purpose)
@@ -626,7 +644,7 @@ export function apply(ctx) {
       async execute(args, exec) {
         const current = config()
         const auth = await resolveAuth(ctx, current, current.asr.provider)
-        const local = await readLocalFile(args.path, 'audio', exec.signal)
+        const local = await readLocalFile(args.path, 'audio', exec.signal, sessionCwd(exec))
         if (!AUDIO_EXTENSIONS.has(path.extname(local.name).toLowerCase())) {
           throw new Error(`${local.name} 不是 WAV/Ogg Opus；ASR 只收 16 位 PCM WAV 与 Ogg Opus`)
         }
@@ -684,7 +702,7 @@ export function apply(ctx) {
         if (!response.ok) throw new Error(await errorDetail(response))
         const bytes = Buffer.from(await response.arrayBuffer())
         if (bytes.length === 0) throw new Error('TTS 未返回音频数据')
-        const cwd = exec.agent?.session?.header?.cwd ?? process.cwd()
+        const cwd = sessionCwd(exec)
         const target = await writeAudio(cwd, current.tts.outputDir, bytes, format, exec.signal)
         if (exec.agent !== undefined) {
           try {
