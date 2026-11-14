@@ -1,0 +1,45 @@
+{
+  "name": "dsh-api-bucket",
+  "version": "1.0.0",
+  "description": "把 DeepSeek「全家桶应用 API」（文件输入、阅读链接、模型安全、OCR、ASR、TTS）注册成模型工具，并在设置面板逐项开关、选择提供方。",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "icon": "./icon.svg",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "bundle",
+    "deepseek",
+    "ocr",
+    "asr",
+    "tts"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

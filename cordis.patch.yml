@@ -1,0 +1,9 @@
+# dsh-api-bucket 的 bundle patch：只插入本插件自己的 Host 行。
+#
+# 本插件的配置**不写进**这份文件，也不写进 profile 的 cordis.patch.yml：
+# 只存在每个 Windows 用户自己的 `$DSH_HOME/dsh-api-bucket-profile.json`
+# （默认 `~/.dsh/dsh-api-bucket-profile.json`），设置面板通过
+# `/__dsh_api_bucket__/config` 端点读写它。首次启动按代码默认值建文件。
+- insert:
+    - id: dsh-api-bucket
+      name: 'dsh-api-bucket'

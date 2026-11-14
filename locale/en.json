@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "title": "API suite",
+    "description": "Register the DeepSeek suite APIs (file input, link reading, model safety, OCR, ASR, TTS) as model tools, each with its own switch and provider in the settings panel."
+  },
+  "capabilities": {
+    "file": "File input",
+    "readlink": "Read link",
+    "safety": "Model safety",
+    "ocr": "OCR",
+    "asr": "Speech recognition",
+    "tts": "Speech synthesis"
+  }
+}

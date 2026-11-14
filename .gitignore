@@ -1,0 +1,5 @@
+# 开发/测试时的临时产物
+dev/*.png
+dev/*.log
+node_modules/
+*.tmp
